@@ -8,6 +8,7 @@ Pixel Pool is an immutable Uniswap v4 canvas hook and its fixed-supply launch to
 - `src/PixelHook.sol:PixelHook`: implements `IHooks` directly. `beforeInitialize` and `afterSwap` are the only enabled permissions. Every callback checks the immutable PoolManager; disabled callbacks also revert for the manager. The constructor validates the deployed address against the declared permissions.
 - `src/HookFlags.sol`: v4 flag helpers. The hook's low 14 address bits must equal **0x2040 / 8256**, for `beforeInitialize | afterSwap`.
 - `script/MineHook.s.sol:MineHook`: a pure CREATE2 salt search using the actual creation bytecode and constructor arguments. It never broadcasts or reads configuration from the environment.
+- `script/PoolParameters.s.sol:PoolParameters`: an offline, pure helper returning the ordered currencies, tick spacing and initial sqrt price for this launch. It takes the actual PIXEL and IMD addresses as arguments and rejects missing or identical currencies.
 
 At initialization, the hook requires an ordered pair containing the supplied launch token and another deployed ERC-20. **The other currency is designated IMD.** It records its address, address order, and `10 ** decimals()` unit once, along with the complete PoolId. Decimals 0 through 74 are supported; a missing or reverting `decimals()` or a higher value rejects initialization. Native currency is not an IMD pair. The PoolManager validates fees, tick spacing and the initial price as usual. Initialization failure rolls back the hook's lock. A second initialization, even with different fee or spacing, is refused.
 
@@ -61,12 +62,31 @@ No deployment transaction is included or authorized. The launch system supplies 
 
 There is no owner, recipient, factory, chain-specific address, or mutable setting in the hook. The two constructor dependencies must already have code. The hook does not need an IMD constructor address because it records the non-PIXEL currency from the first PoolKey. The separate launch manifest is the launch system's responsibility; this project supplies the contracts and their parameter mapping, rather than guessed chain values.
 
+### Resolved manifest pool inputs
+
+The launch's **`pool.tickSpacing` is `60`**. Its **`pool.initialPrice` is 0.0000025 IMD per PIXEL**, from an opening market cap of **2,500 IMD** divided by **1,000,000,000 PIXEL**. Both currencies have **18 decimals**. This market cap specifies the initial price; it does not prescribe a liquidity deposit or promise a future valuation.
+
+Currency0 is always the numerically lower address. Use the following exact integer `sqrtPriceX96` when initializing, where the v4 price is currency1 units per currency0 unit:
+
+| Currency0 | Currency1 | Initial currency1 / currency0 price | `sqrtPriceX96` |
+| --- | --- | --- | --- |
+| PIXEL | IMD | 0.0000025 IMD / PIXEL | `125270724187523965593206901` |
+| IMD | PIXEL | 400,000 PIXEL / IMD | `50108289675009586237282760313921` |
+
+These are the requester-supplied Q96 encodings of the square root of the oriented price. The PIXEL-first integer is one unit above the mathematical floor; use the supplied value exactly. Preserve these large integers as decimal strings or arbitrary-precision integers in manifest tooling, never floating-point numbers. The existing LP fee remains **12500 (1.25%)**, separate from tick spacing.
+
+For a factory that accepts these pool inputs, call `PoolParameters.run(pixel, imd)` with the actual launch addresses. Copy the returned `currency0`, `currency1` and `tickSpacing` into the PoolKey (with the launch hook and fee 12500), and pass the returned `sqrtPriceX96` to `PoolManager.initialize`. The helper performs no transactions or metadata reads; the launch operator must verify both token identities and their 18 decimals. A different decimal scale requires corrected launch inputs before initialization.
+
+**If the launch factory sets tick spacing or initial price itself, use its authoritative value for that parameter.** The launch operator must inspect the actual factory implementation/configuration, record its effective values in the manifest, and check the resulting PoolKey and initialization price. No factory implementation, address or ABI is supplied in this repository, so the helper cannot discover factory values and must not override them. This resolves the missing economic choices without inventing chain addresses or a manifest schema.
+
+The hook remains unchanged and does not enforce these economics. Existing generic hook fixtures intentionally use a 1:1 price (`79228162514264337593543950336`) to exercise swaps; that value is **not this launch's opening price**. `test/PoolParameters.t.sol` checks the launch values, both currency orders, the market-cap calculation, real PoolManager initialization and failure recovery.
+
 Deployment procedure:
 
-1. Select the chain's real PoolManager and real IMD contract. Confirm the IMD contract is a standard, stable-decimal ERC-20 suitable for v4 and verify its decimals. Confirm Cancun support.
+1. Select the chain's real PoolManager and real IMD contract. Confirm the IMD contract is a standard, stable-decimal ERC-20 suitable for v4 with 18 decimals, and confirm PIXEL has 18 decimals. Confirm Cancun support. Determine whether the factory sets the pool inputs itself and record the effective values as described above.
 2. Determine the actual factory/CREATE2 deployer and the PIXEL address from the factory's deployment plan. Mine against these actual addresses and the final compiler settings. `MineHook.run(deployer, manager, token, start, attempts)` returns a salt and predicted hook address, or `SaltNotFound`; continue with the next range if exhausted. Tests call this function directly and verify the CREATE2 result. A salt mined for another deployer, token, manager, or bytecode is invalid.
-3. Have the factory deploy PIXEL, deploy the hook at the mined address, and initialize the intended PIXEL/IMD pool **in the same transaction**. Use the approved LP fee 12500 and the launch's selected tick spacing and correctly oriented initial sqrt price. The hook itself sets or overrides none of those economics. The factory supplies liquidity according to the launch policy.
-4. Verify `getHookPermissions()`, the address mask, immutable dependencies, `poolId()`, `imdCurrency()`, `imdIsCurrency0()`, and `imdUnit()` against the intended launch. Verify deployed bytecode and publish the source.
+3. For the original launch, the factory deploys PIXEL, deploys the hook at the mined address, and initializes the intended PIXEL/IMD pool **in the same transaction**. Use the approved LP fee 12500, tick spacing **60** and the correctly oriented sqrt price from the table above, subject to authoritative factory values. The hook itself sets or overrides none of those economics. The factory supplies liquidity according to the launch policy; liquidity tick bounds must be multiples of the effective spacing and cover the opening price to be active. This follow-up performs no deployment and never redeploys, replaces or re-mints an existing PIXEL token.
+4. Verify `getHookPermissions()`, the address mask, immutable dependencies, `poolId()`, `imdCurrency()`, `imdIsCurrency0()`, and `imdUnit()` against the intended launch. Check the PoolManager's `Initialize` event for the ordered currencies, fee, tick spacing and exact opening sqrt price; later swaps can change the current price. Verify deployed bytecode and publish the source.
 
 The initializer callback also causes initialization at the predicted hook address to fail while that address has no code. It does not reserve a separately deployed but uninitialized hook against other callers. Atomic deployment and initialization are essential; the first successful pool cannot be changed later.
 

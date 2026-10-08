@@ -15,6 +15,7 @@ The additional suites extend that coverage:
 
 | Suite | Properties checked |
 | --- | --- |
+| `PoolParameters.t.sol` | Launch spacing 60 and both exact supplied sqrt prices; sorted currencies; independent market-cap calculation and Q96 rounding; real PoolManager initialization with both 18-decimal currency orders; rejection of missing/identical or reversed currencies; invalid-price rollback and successful retry; caller-independent offline configuration. |
 | `PixelHookEdges.t.sol` | Invalid dependencies and pool ordering; reverting/malformed metadata and initialization recovery; cached IMD scale; threshold neighbors at decimal scales 0–35; unsupported scales 75–255; all five pool identity fields; caller versus origin authorization; complete SVG and packed canvas after second-pass row rollover. |
 | `PixelHookInvariant.t.sol` | Real PoolManager swaps with three funded actors, both directions and amount modes, liquidity changes, failed settlements, and unauthorized callbacks. Every sequence preserves pool identity, the fixed LP fee, the canvas model, supply conservation, settled deltas, and zero hook funds or claims. |
 | `PixelTokenInvariant.t.sol` | Four actors transfer, approve, spend allowances, attempt invalid transfers, and probe forbidden administration. Every actor balance and allowance matches an independent ledger; supply stays fixed; failures roll back allowance spending. |
